@@ -1,15 +1,10 @@
 name: coletar
 
-# A cada 15 minutos. O cron do GitHub e best-effort e atrasa 5 a 15 minutos com
-# frequencia — e tudo bem: cada snapshot grava o proprio timestamp, entao o que
-# se constroi e uma amostra de exposicao, nao uma grade regular.
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
-# Duas execucoes ao mesmo tempo competiriam pelo push. Sem cancelar a que ja
-# roda: um snapshot perdido e dado perdido para sempre.
 concurrency:
   group: coleta
   cancel-in-progress: false
