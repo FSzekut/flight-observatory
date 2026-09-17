@@ -66,3 +66,33 @@ workflow, não o código.
 Chamada que falha **grava o registro de falha no bronze** com o erro e o horário, e o workflow
 **não quebra**. Buraco declarado vale mais que buraco silencioso: na hora de calcular taxa, é
 preciso saber a diferença entre "não havia aeronave" e "não houve coleta".
+
+## 2026-09-17 — o GCS substitui o Git como destino do bronze
+
+A decisão de 14/09 resolveu o problema imediato: guardar no Git era melhor do que perder um
+dado irrecuperável. Ela não escala como destino operacional. Cada snapshot criava commit,
+disputava push com execuções próximas e fazia o repositório crescer junto com o dado.
+
+O bronze passa a ser gravado no bucket `fszekut-flight-observatory-bronze`, em `us-central1`,
+com acesso uniforme no nível do bucket. O caminho permanece
+`bronze/coleta_date=YYYY-MM-DD/opensky-REGIAO-HHMMSS.json`: a mudança de infraestrutura não
+altera o contrato dos dados e preserva a partição Hive-style para a futura camada silver.
+
+O coletor mantém fallback local quando `BRONZE_BUCKET` não existe, para desenvolvimento e para
+a transição do workflow legado. No Cloud Run, esse fallback é proibido: se `CLOUD_RUN_JOB`
+existir sem `BRONZE_BUCKET`, o processo termina antes de chamar o OpenSky. O filesystem do
+container não é tratado como armazenamento.
+
+## 2026-09-17 — falha da fonte e falha de persistência têm destinos diferentes
+
+Falha do OpenSky continua sendo dado de bronze: o registro guarda horário, status e erro, e a
+execução pode terminar normalmente porque o buraco foi declarado no próprio conjunto.
+
+Falha do GCS não pode ser gravada no mesmo GCS que falhou. Nesse caso, o coletor envia ao
+`stderr` um JSON estruturado com o destino pretendido, a exceção e o snapshot original, e
+depois propaga a exceção. No Cloud Run, isso preserva evidência no log e deixa a execução
+vermelha; não existe fallback silencioso para o disco efêmero.
+
+A autenticação usa Application Default Credentials localmente e a identidade do serviço no
+Cloud Run. Nenhuma chave de serviço é armazenada no repositório ou configurada em variável de
+ambiente.

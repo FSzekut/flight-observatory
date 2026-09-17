@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Snapshot do OpenSky Network para o bronze.
 
-Roda a cada 15 minutos pelo GitHub Actions. Usa so a biblioteca padrao, de
-proposito: sem dependencia nao ha passo de instalacao e o job termina em segundos.
+Roda a cada 15 minutos como Cloud Run Job e tambem pode ser executado localmente.
+Com BRONZE_BUCKET, grava no GCS usando google-cloud-storage; sem a variavel,
+mantem o fallback local. No Cloud Run, o bucket e obrigatorio.
 
 O QUE ESTE ARQUIVO NAO FAZ, e isso e regra:
 nao deduplica, nao filtra, nao normaliza e nao descarta campo. Bronze guarda o
@@ -34,6 +35,10 @@ BBOX = {
 REGIAO = os.getenv("REGIAO", "sudeste")
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BRONZE = RAIZ / "data" / "bronze"
+BRONZE_BUCKET = os.getenv("BRONZE_BUCKET")
+if BRONZE_BUCKET:
+    from google.cloud import storage
+
 TIMEOUT = 30
 
 
@@ -80,20 +85,69 @@ def coletar():
 
 
 def gravar(agora, registro):
+    """Grava o snapshot no GCS ou localmente."""
+
+    nome_arquivo = f"opensky-{REGIAO}-{agora:%H%M%S}.json"
+
+    # Serializa exatamente uma vez.
+    conteudo = json.dumps(
+        registro,
+        ensure_ascii=False,
+    )
+
+    if BRONZE_BUCKET:
+        # Isto e um nome de objeto GCS, nao um caminho local.
+        nome_objeto = (
+            f"bronze/"
+            f"coleta_date={agora:%Y-%m-%d}/"
+            f"{nome_arquivo}"
+        )
+        try:
+            cliente = storage.Client()
+            bucket = cliente.bucket(BRONZE_BUCKET)
+            blob = bucket.blob(nome_objeto)
+
+            blob.upload_from_string(
+                conteudo,
+                content_type="application/json",
+            )
+        except Exception as erro:
+            falha = {
+                "tipo": "falha_persistencia",
+                "destino": f"gs://{BRONZE_BUCKET}/{nome_objeto}",
+                "erro": f"{type(erro).__name__}: {erro}",
+                "registro": registro,
+            }
+            json.dump(falha, sys.stderr, ensure_ascii=False)
+            print(file=sys.stderr)
+            raise
+        return f"gs://{BRONZE_BUCKET}/{nome_objeto}"
+
+    # Armazenamento local.
     parte = BRONZE / f"coleta_date={agora:%Y-%m-%d}"
     parte.mkdir(parents=True, exist_ok=True)
-    destino = parte / f"opensky-{REGIAO}-{agora:%H%M%S}.json"
-    destino.write_text(json.dumps(registro, ensure_ascii=False), encoding="utf-8")
-    return destino
+
+    destino = parte / nome_arquivo
+
+    destino.write_text(
+        conteudo,
+        encoding="utf-8",
+    )
+
+    return str(destino.relative_to(RAIZ))
 
 
 def main():
+    if not BRONZE_BUCKET and os.getenv("CLOUD_RUN_JOB"):
+        print("  ERRO: SEM bucket de bronze e esta rodando no Cloud Run", file=sys.stderr)
+        return 1
+
     agora, registro = coletar()
     destino = gravar(agora, registro)
 
     n = len((registro.get("resposta") or {}).get("states") or [])
     quota = registro["quota_restante"]
-    print(f"{destino.relative_to(RAIZ)}")
+    print(f"  gravado em: {destino}")
     print(f"  sucesso: {registro['sucesso']} | http: {registro['http_status']}")
     print(f"  aeronaves: {n}")
     print(f"  quota restante: {quota}")

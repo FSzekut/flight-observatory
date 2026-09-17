@@ -5,7 +5,8 @@ Série temporal de voos e condições meteorológicas, coletada a cada 15 minuto
 
 ![passo](https://img.shields.io/badge/passo-0%20bronze-blue) ![python](https://img.shields.io/badge/python-3.12-informational) ![licen%C3%A7a](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
 
-**Estado: passo 0 (bronze).** Coleta funcionando, primeira partição gravada.
+**Estado: passo 0 (bronze).** Coleta validada contra o GCS; migração do agendamento para
+Cloud Run e Cloud Scheduler em andamento.
 
 ## Por que existe
 
@@ -30,9 +31,13 @@ coletor que existe desde o dia 1.
 ## Arquitetura
 
 ```
-OpenSky (15 min) ──► bronze ──► silver ──► gold ──► agente com RAG ──► servidor MCP
-  Open-Meteo             cru     limpo e    taxa      cita a narrativa
-  Aviation Safety                normalizado          de origem
+OpenSky (15 min) ──► Cloud Run Job ──► GCS bronze ──► silver ──► gold
+  Open-Meteo                                      cru     limpo e    taxa
+  Aviation Safety                                         normalizado
+
+gold ──► agente com RAG ──► servidor MCP
+          cita a narrativa
+          de origem
 ```
 
 ## O princípio do bronze, e ele não se negocia
@@ -44,15 +49,18 @@ restante, e se deu certo.
 Se a regra de limpeza mudar amanhã, dá para reprocessar tudo. Se a limpeza acontecer no bronze,
 o que foi descartado não volta nunca.
 
-**Falha também é dado.** Chamada que falha grava o registro de falha, e o workflow não quebra.
-Na hora de calcular taxa é preciso distinguir *"não havia aeronave"* de *"não houve coleta"*.
+**Falha também é dado.** Chamada ao OpenSky que falha grava o registro de falha, e o job não
+quebra. Falha de persistência é diferente: o snapshot original vai para o log estruturado e o
+job termina com erro. Na hora de calcular taxa é preciso distinguir *"não havia aeronave"* de
+*"não houve coleta"*.
 
 ## Estrutura
 
 ```
-src/coletar.py                       um snapshot do OpenSky, sem dependência externa
-.github/workflows/coletar.yml        cron a cada 15 min, commita o bronze
-data/bronze/coleta_date=YYYY-MM-DD/  uma partição por dia
+src/coletar.py                       coleta e grava no GCS ou no fallback local
+requirements.txt                    dependência do cliente GCS
+.github/workflows/coletar.yml        coletor legado durante a transição
+data/bronze/coleta_date=YYYY-MM-DD/  fallback local e histórico já coletado
 docs/decisoes.md                     por que cada escolha foi feita
 ```
 
@@ -72,14 +80,34 @@ testar e cobrir falha.
 
 ## Uso
 
+Crie o ambiente e instale a dependência:
+
 ```bash
-python3 src/coletar.py
+uv venv
+uv pip install -r requirements.txt
 ```
 
-Sem dependências: só a biblioteca padrão. A região é configurável por ambiente:
+Sem `BRONZE_BUCKET`, o coletor preserva o comportamento local:
 
 ```bash
-LAMIN=-26 LOMIN=-50 LAMAX=-25 LOMAX=-48 REGIAO=curitiba python3 src/coletar.py
+.venv/bin/python src/coletar.py
+```
+
+Com `BRONZE_BUCKET`, grava o mesmo JSON no GCS e mantém o caminho de partição Hive-style:
+
+```bash
+BRONZE_BUCKET=fszekut-flight-observatory-bronze .venv/bin/python src/coletar.py
+```
+
+Localmente, o cliente GCS usa Application Default Credentials. No Cloud Run, usa a identidade
+do serviço, sem arquivo de chave. Se `CLOUD_RUN_JOB` existir e `BRONZE_BUCKET` estiver ausente,
+o processo falha antes de consumir quota do OpenSky.
+
+A região continua configurável por ambiente:
+
+```bash
+LAMIN=-26 LOMIN=-50 LAMAX=-25 LOMAX=-48 REGIAO=curitiba \
+  .venv/bin/python src/coletar.py
 ```
 
 ## Sobre os dados
