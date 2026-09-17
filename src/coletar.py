@@ -3,7 +3,8 @@
 
 Roda a cada 15 minutos como Cloud Run Job e tambem pode ser executado localmente.
 Com BRONZE_BUCKET, grava no GCS usando google-cloud-storage; sem a variavel,
-mantem o fallback local. No Cloud Run, o bucket e obrigatorio.
+mantem o fallback local. No Cloud Run, o bucket e a credencial OAuth2 do
+OpenSky sao obrigatorios.
 
 O QUE ESTE ARQUIVO NAO FAZ, e isso e regra:
 nao deduplica, nao filtra, nao normaliza e nao descarta campo. Bronze guarda o
@@ -19,10 +20,15 @@ import os
 import pathlib
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
 API = "https://opensky-network.org/api/states/all"
+TOKEN_API = (
+    "https://auth.opensky-network.org/auth/realms/"
+    "opensky-network/protocol/openid-connect/token"
+)
 
 # Corredor Sudeste: a regiao de maior trafego do pais, cobrindo a area
 # terminal de Sao Paulo, Rio e Belo Horizonte. Ver docs/decisoes.md.
@@ -35,11 +41,43 @@ BBOX = {
 REGIAO = os.getenv("REGIAO", "sudeste")
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BRONZE = RAIZ / "data" / "bronze"
+CREDENCIAIS_OPENSKY = os.getenv("OPENSKY_CREDENTIALS")
 BRONZE_BUCKET = os.getenv("BRONZE_BUCKET")
 if BRONZE_BUCKET:
     from google.cloud import storage
 
 TIMEOUT = 30
+
+
+def obter_token():
+    """Obtem um token OAuth2 quando ha credenciais configuradas."""
+    if not CREDENCIAIS_OPENSKY:
+        return None
+
+    credenciais = json.loads(
+        pathlib.Path(CREDENCIAIS_OPENSKY).read_text(encoding="utf-8")
+    )
+    formulario = urllib.parse.urlencode(
+        {
+            "grant_type": "client_credentials",
+            "client_id": credenciais["clientId"],
+            "client_secret": credenciais["clientSecret"],
+        }
+    ).encode("utf-8")
+    requisicao = urllib.request.Request(
+        TOKEN_API,
+        data=formulario,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "flight-observatory/0.1",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(requisicao, timeout=TIMEOUT) as resposta:
+        resposta_token = json.load(resposta)
+
+    return resposta_token["access_token"]
 
 
 def coletar():
@@ -54,17 +92,26 @@ def coletar():
         "bbox": BBOX,
         "url": url,
         "fonte": "opensky-network",
+        "autenticacao": "oauth2" if CREDENCIAIS_OPENSKY else "anonima",
         "sucesso": None,
         "http_status": None,
         # Medido, nao suposto: e assim que se descobre o custo real em creditos
         # de uma chamada com esta bbox. Ver docs/decisoes.md.
         "quota_restante": None,
+        "etapa_erro": None,
         "erro": None,
         "resposta": None,
     }
 
-    req = urllib.request.Request(url, headers={"User-Agent": "flight-observatory/0.1"})
+    etapa = "autenticacao"
     try:
+        token = obter_token()
+        cabecalhos = {"User-Agent": "flight-observatory/0.1"}
+        if token:
+            cabecalhos["Authorization"] = f"Bearer {token}"
+
+        etapa = "coleta"
+        req = urllib.request.Request(url, headers=cabecalhos)
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             registro["http_status"] = r.status
             restante = r.headers.get("x-rate-limit-remaining")
@@ -74,11 +121,13 @@ def coletar():
     except urllib.error.HTTPError as e:
         registro["sucesso"] = False
         registro["http_status"] = e.code
+        registro["etapa_erro"] = etapa
         registro["erro"] = f"HTTPError: {e.reason}"
         restante = e.headers.get("x-rate-limit-remaining") if e.headers else None
         registro["quota_restante"] = int(restante) if restante is not None else None
     except Exception as e:  # noqa: BLE001 — falha tambem e dado
         registro["sucesso"] = False
+        registro["etapa_erro"] = etapa
         registro["erro"] = f"{type(e).__name__}: {e}"
 
     return agora, registro
@@ -138,8 +187,13 @@ def gravar(agora, registro):
 
 
 def main():
-    if not BRONZE_BUCKET and os.getenv("CLOUD_RUN_JOB"):
+    em_cloud_run = os.getenv("CLOUD_RUN_JOB")
+
+    if not BRONZE_BUCKET and em_cloud_run:
         print("  ERRO: SEM bucket de bronze e esta rodando no Cloud Run", file=sys.stderr)
+        return 1
+    if not CREDENCIAIS_OPENSKY and em_cloud_run:
+        print("  ERRO: SEM credencial OpenSky e esta rodando no Cloud Run", file=sys.stderr)
         return 1
 
     agora, registro = coletar()

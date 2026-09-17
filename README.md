@@ -5,8 +5,8 @@ Série temporal de voos e condições meteorológicas, coletada a cada 15 minuto
 
 ![passo](https://img.shields.io/badge/passo-0%20bronze-blue) ![python](https://img.shields.io/badge/python-3.14-informational) ![licen%C3%A7a](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
 
-**Estado: passo 0 (bronze).** Coleta validada contra o GCS; migração do agendamento para
-Cloud Run e Cloud Scheduler em andamento.
+**Estado: passo 0 (bronze).** Job implantado no Cloud Run e persistência validada no GCS;
+autenticação OAuth2 do OpenSky e agendamento em validação.
 
 ## Por que existe
 
@@ -31,9 +31,12 @@ coletor que existe desde o dia 1.
 ## Arquitetura
 
 ```
-OpenSky (15 min) ──► Cloud Run Job ──► GCS bronze ──► silver ──► gold
-  Open-Meteo                                      cru     limpo e    taxa
-  Aviation Safety                                         normalizado
+OpenSky OAuth2 (15 min) ──► Cloud Run Job ──► GCS bronze ──► silver ──► gold
+                                  ▲                          cru     limpo e    taxa
+                            Secret Manager                          normalizado
+
+Open-Meteo ────────────────────────────────────────────────► silver
+Aviation Safety ───────────────────────────────────────────► silver
 
 gold ──► agente com RAG ──► servidor MCP
           cita a narrativa
@@ -43,8 +46,8 @@ gold ──► agente com RAG ──► servidor MCP
 ## O princípio do bronze, e ele não se negocia
 
 **Bronze guarda o retorno cru, sem transformação.** Sem dedup, sem filtro, sem normalização. O
-que se acrescenta é só metadado de coleta: quando, com qual bounding box, com qual quota
-restante, e se deu certo.
+que se acrescenta é só metadado de coleta: quando, com qual bounding box, com qual modo de
+autenticação, com qual quota restante, em qual etapa falhou e se deu certo.
 
 Se a regra de limpeza mudar amanhã, dá para reprocessar tudo. Se a limpeza acontecer no bronze,
 o que foi descartado não volta nunca.
@@ -59,6 +62,9 @@ _"não houve coleta"_.
 ```
 src/coletar.py                       coleta e grava no GCS ou no fallback local
 requirements.txt                    dependência do cliente GCS
+Procfile                            comando de entrada do buildpack
+.python-version                     runtime usado no build
+.gcloudignore                       contexto mínimo enviado ao Cloud Build
 .github/workflows/coletar.yml        coletor legado durante a transição
 data/bronze/coleta_date=YYYY-MM-DD/  fallback local e histórico já coletado
 docs/decisoes.md                     por que cada escolha foi feita
@@ -66,17 +72,17 @@ docs/decisoes.md                     por que cada escolha foi feita
 
 ## Cota, e ela foi medida
 
-O acesso anônimo do OpenSky tem **400 créditos por dia**, e o custo por chamada depende da área
-da bounding box. Em vez de deduzir da documentação, **o coletor mede**: grava
-`x-rate-limit-remaining` em todo registro.
+O acesso anônimo do OpenSky tem **400 créditos por dia** e uma conta padrão autenticada tem
+**4.000**. O custo por chamada depende da área da bounding box. Em vez de deduzir da
+documentação, **o coletor mede**: grava `x-rate-limit-remaining` em todo registro.
 
 | Bounding box           | Área        | Custo medido   |
 | ---------------------- | ----------- | -------------- |
 | Curitiba, 1° × 2°      | 2 graus²    | 1 crédito      |
 | **Sudeste, 5° × 6,5°** | 32,5 graus² | **2 créditos** |
 
-**A 15 minutos: 96 chamadas × 2 = 192 créditos por dia.** Sobram mais de 200 para reprocessar,
-testar e cobrir falha.
+**A 15 minutos: 96 chamadas × 2 = 192 créditos por dia.** Restam 208 créditos no acesso
+anônimo ou 3.808 em uma conta padrão autenticada para testar e cobrir falhas.
 
 ## Uso
 
@@ -87,7 +93,8 @@ uv venv
 uv pip install -r requirements.txt
 ```
 
-Sem `BRONZE_BUCKET`, o coletor preserva o comportamento local:
+Sem `BRONZE_BUCKET` nem `OPENSKY_CREDENTIALS`, o coletor preserva o comportamento local e
+anônimo:
 
 ```bash
 .venv/bin/python src/coletar.py
@@ -99,9 +106,21 @@ Com `BRONZE_BUCKET`, grava o mesmo JSON no GCS e mantém o caminho de partição
 BRONZE_BUCKET=fszekut-flight-observatory-bronze .venv/bin/python src/coletar.py
 ```
 
+Para autenticar localmente, `OPENSKY_CREDENTIALS` recebe apenas o caminho do JSON fornecido
+pelo OpenSky:
+
+```bash
+OPENSKY_CREDENTIALS=/caminho/seguro/credentials.json \
+  .venv/bin/python src/coletar.py
+```
+
+O coletor troca `clientId` e `clientSecret` por um token temporário e envia o token somente no
+cabeçalho `Authorization`. Credencial e token não entram no bronze nem nos logs.
+
 Localmente, o cliente GCS usa Application Default Credentials. No Cloud Run, usa a identidade
-do serviço, sem arquivo de chave. Se `CLOUD_RUN_JOB` existir e `BRONZE_BUCKET` estiver ausente,
-o processo falha antes de consumir quota do OpenSky.
+do serviço, sem arquivo de chave. A credencial do OpenSky fica no Secret Manager e é montada
+como arquivo no container. Se `CLOUD_RUN_JOB` existir sem `BRONZE_BUCKET` ou sem
+`OPENSKY_CREDENTIALS`, o processo falha antes de consumir quota do OpenSky.
 
 A região continua configurável por ambiente:
 
