@@ -3,7 +3,7 @@
 Série temporal de voos e condições meteorológicas, coletada a cada 15 minutos, para servir de
 **denominador** à análise de ocorrências aéreas.
 
-![passo](https://img.shields.io/badge/passo-0%20bronze-blue) ![python](https://img.shields.io/badge/python-3.12-informational) ![licen%C3%A7a](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
+![passo](https://img.shields.io/badge/passo-0%20bronze-blue) ![python](https://img.shields.io/badge/python-3.14-informational) ![licen%C3%A7a](https://img.shields.io/badge/licen%C3%A7a-MIT-green)
 
 **Estado: passo 0 (bronze).** Coleta validada contra o GCS; migração do agendamento para
 Cloud Run e Cloud Scheduler em andamento.
@@ -16,8 +16,8 @@ ATSB, MAK e agências nacionais de investigação. É um corpus público, denso 
 🎯 **E ele é só numerador.** Registra o que deu errado e não registra o que deu certo nas mesmas
 condições.
 
-Por isso toda análise sobre essas bases chega à mesma banalidade: *acidente acontece com tempo
-ruim*. Só que um milhão de voos seguros também aconteceu com tempo ruim, no mesmo período, nos
+Por isso toda análise sobre essas bases chega à mesma banalidade: _acidente acontece com tempo
+ruim_. Só que um milhão de voos seguros também aconteceu com tempo ruim, no mesmo período, nos
 mesmos aeroportos. **Sem denominador não existe taxa, existe correlação.**
 
 Este repositório constrói o denominador que falta: quantas aeronaves estavam no ar, onde, e sob
@@ -51,8 +51,8 @@ o que foi descartado não volta nunca.
 
 **Falha também é dado.** Chamada ao OpenSky que falha grava o registro de falha, e o job não
 quebra. Falha de persistência é diferente: o snapshot original vai para o log estruturado e o
-job termina com erro. Na hora de calcular taxa é preciso distinguir *"não havia aeronave"* de
-*"não houve coleta"*.
+job termina com erro. Na hora de calcular taxa é preciso distinguir _"não havia aeronave"_ de
+_"não houve coleta"_.
 
 ## Estrutura
 
@@ -70,9 +70,9 @@ O acesso anônimo do OpenSky tem **400 créditos por dia**, e o custo por chamad
 da bounding box. Em vez de deduzir da documentação, **o coletor mede**: grava
 `x-rate-limit-remaining` em todo registro.
 
-| Bounding box | Área | Custo medido |
-|---|---|---|
-| Curitiba, 1° × 2° | 2 graus² | 1 crédito |
+| Bounding box           | Área        | Custo medido   |
+| ---------------------- | ----------- | -------------- |
+| Curitiba, 1° × 2°      | 2 graus²    | 1 crédito      |
 | **Sudeste, 5° × 6,5°** | 32,5 graus² | **2 créditos** |
 
 **A 15 minutos: 96 chamadas × 2 = 192 créditos por dia.** Sobram mais de 200 para reprocessar,
@@ -120,21 +120,21 @@ e dados meteorológicos públicos. **Nenhum dado pessoal é coletado, armazenado
 **Não prevê acidente, e isso é decisão de arquitetura.** Segurança aérea é disciplina regulada e
 madura, com dados e métodos que este repositório não tem.
 
-O sistema **descreve**: *estas condições aparecem em N narrativas históricas, e há M aeronaves
-operando em condição semelhante*. Ele **não** diz que um voo está em risco, e a camada de
+O sistema **descreve**: _estas condições aparecem em N narrativas históricas, e há M aeronaves
+operando em condição semelhante_. Ele **não** diz que um voo está em risco, e a camada de
 guardrail existe para impedir que ele diga.
 
 ## Passos
 
-| Passo | Estado |
-|---|---|
-| 0. Bronze — coleta do OpenSky | 🔵 em andamento |
-| 1. Meteorologia (Open-Meteo, inclusive retroativa) | a fazer |
-| 2. Narrativas (Aviation Safety Data) | a fazer |
-| 3. Silver e gold, com o denominador | a fazer |
-| 4. RAG sobre as narrativas, com citação por registro | a fazer |
-| 5. Camada de avaliação e guardrail anti-previsão | a fazer |
-| 6. Servidor MCP e frente ao vivo | a fazer |
+| Passo                                                | Estado          |
+| ---------------------------------------------------- | --------------- |
+| 0. Bronze — coleta do OpenSky                        | 🔵 em andamento |
+| 1. Meteorologia (Open-Meteo, inclusive retroativa)   | a fazer         |
+| 2. Narrativas (Aviation Safety Data)                 | a fazer         |
+| 3. Silver e gold, com o denominador                  | a fazer         |
+| 4. RAG sobre as narrativas, com citação por registro | a fazer         |
+| 5. Camada de avaliação e guardrail anti-previsão     | a fazer         |
+| 6. Servidor MCP e frente ao vivo                     | a fazer         |
 
 ## Licença
 
